@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="styles.css" />
+		<script src="alsa-pi.js"></script>
+	</head>
+	<body>
+		<div class="sdpi-wrapper">
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Sound card</div>
+				<select class="sdpi-item-value select" id="card"></select>
+			</div>
+
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Control</div>
+				<select class="sdpi-item-value select" id="control"></select>
+			</div>
+			<div class="hint" id="controlHint">The same list alsamixer shows for this card (F6).</div>
+
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Step</div>
+				<div class="sdpi-item-value">
+					<input type="range" id="step" min="1" max="25" value="5" />
+					<span class="range-value" id="stepValue">5%</span>
+				</div>
+			</div>
+
+			<div class="sdpi-item" id="keyActionItem">
+				<div class="sdpi-item-label">On press</div>
+				<select class="sdpi-item-value select" id="keyAction">
+					<option value="toggleMute">Toggle mute</option>
+					<option value="up">Volume up</option>
+					<option value="down">Volume down</option>
+					<option value="set">Set to a fixed level</option>
+				</select>
+			</div>
+
+			<div class="sdpi-item" id="pressActionItem" style="display: none">
+				<div class="sdpi-item-label">On dial press</div>
+				<select class="sdpi-item-value select" id="pressAction">
+					<option value="toggleMute">Toggle mute</option>
+					<option value="none">Do nothing</option>
+				</select>
+			</div>
+
+			<div class="sdpi-item" id="setToItem" style="display: none">
+				<div class="sdpi-item-label">Level</div>
+				<div class="sdpi-item-value">
+					<input type="range" id="setTo" min="0" max="100" value="50" />
+					<span class="range-value" id="setToValue">50%</span>
+				</div>
+			</div>
+
+			<details class="sdpi-item">
+				<summary>Advanced</summary>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Label</div>
+					<input class="sdpi-item-value" id="label" placeholder="control name" />
+				</div>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Show label</div>
+					<input id="showLabel" type="checkbox" class="sdpi-item-value" />
+				</div>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Unmute on raise</div>
+					<input id="unmuteOnRaise" type="checkbox" class="sdpi-item-value" />
+				</div>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Volume scale</div>
+					<select class="sdpi-item-value select" id="mapped">
+						<option value="false">Raw (amixer)</option>
+						<option value="true">Perceptual (-M)</option>
+					</select>
+				</div>
+				<div class="hint">
+					Perceptual matches how alsamixer maps dB to its bar; raw is a plain percentage of the control's range.
+				</div>
+			</details>
+
+			<div class="status" id="status"></div>
+		</div>
+
+		<script>
+			function onPropertyInspectorReady(pi) {
+				const $ = (id) => document.getElementById(id);
+				const isEncoder = pi.controller === "Encoder";
+				// Persist the form's own defaults so a never-edited action behaves
+				// the way this panel says it does.
+				pi.applyDefaults({ card: "default", control: "", step: 5, keyAction: isEncoder ? undefined : "toggleMute" });
+				const s = pi.settings;
+
+				$("step").value = s.step ?? 5;
+				$("stepValue").textContent = `${$("step").value}%`;
+				$("keyAction").value = s.keyAction ?? "toggleMute";
+				$("pressAction").value = s.pressAction ?? "toggleMute";
+				$("setTo").value = s.setTo ?? 50;
+				$("setToValue").textContent = `${$("setTo").value}%`;
+				$("label").value = s.label ?? "";
+				$("showLabel").checked = s.showLabel !== false;
+				$("unmuteOnRaise").checked = s.unmuteOnRaise !== false;
+				$("mapped").value = String(!!s.mapped);
+
+				function syncVisibility() {
+					$("setToItem").style.display = $("keyAction").value === "set" && !isEncoder ? "" : "none";
+					$("keyActionItem").style.display = isEncoder ? "none" : "";
+					$("pressActionItem").style.display = isEncoder ? "" : "none";
+				}
+				syncVisibility();
+
+				$("card").addEventListener("change", (e) => {
+					pi.set("card", e.target.value);
+					// The control list belongs to the card; clear it so a stale
+					// selection cannot silently target the wrong hardware.
+					pi.set("control", "");
+					pi.requestControls(e.target.value);
+				});
+				$("control").addEventListener("change", (e) => pi.set("control", e.target.value));
+				$("step").addEventListener("input", (e) => {
+					$("stepValue").textContent = `${e.target.value}%`;
+					pi.set("step", Number(e.target.value));
+				});
+				$("keyAction").addEventListener("change", (e) => {
+					pi.set("keyAction", e.target.value);
+					syncVisibility();
+				});
+				$("pressAction").addEventListener("change", (e) => pi.set("pressAction", e.target.value));
+				$("setTo").addEventListener("input", (e) => {
+					$("setToValue").textContent = `${e.target.value}%`;
+					pi.set("setTo", Number(e.target.value));
+				});
+				$("label").addEventListener("input", (e) => pi.set("label", e.target.value));
+				$("showLabel").addEventListener("change", (e) => pi.set("showLabel", e.target.checked));
+				$("unmuteOnRaise").addEventListener("change", (e) => pi.set("unmuteOnRaise", e.target.checked));
+				$("mapped").addEventListener("change", (e) => pi.set("mapped", e.target.value === "true"));
+
+				pi.onControls((controls) => {
+					// A volume action is only useful on controls that have a level.
+					const usable = controls.filter((c) => c.hasVolume);
+					pi.fill(
+						$("control"),
+						usable.map((c) => ({
+							value: c.id,
+							label: `${c.name}${c.kind === "capture" ? " (capture)" : ""}${
+								c.percent === null ? "" : ` — ${c.percent}%`
+							}`,
+						})),
+						pi.settings.control ?? "",
+						"Auto (Master)",
+					);
+					const skipped = controls.length - usable.length;
+					$("status").textContent = usable.length
+						? `${usable.length} control${usable.length === 1 ? "" : "s"} with a volume level${
+								skipped ? `, ${skipped} switch-only hidden` : ""
+							}.`
+						: "This card has no controls with an adjustable level.";
+				});
+			}
+		</script>
+	</body>
+</html>

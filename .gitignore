@@ -1,0 +1,17 @@
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+
+# Local scratch
+/tmp/
+*.log

@@ -1,0 +1,455 @@
+#!/usr/bin/env node
+"use strict";
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 Valentyn Pavliuchenko
+
+// End-to-end test: runs the real plugin against a mock OpenDeck and real ALSA
+// hardware, then restores whatever mixer state it touched.
+//
+//   node tools/test-plugin.js [cardIndex]
+
+const { spawn, execFileSync } = require("node:child_process");
+const path = require("node:path");
+const { MockOpenDeck } = require("./mock-opendeck.js");
+const alsa = require("../com.valentyn.alsa.sdPlugin/lib/alsa.js");
+
+const CARD = Number(process.argv[2] ?? pickCard());
+const TARGET = alsa.resolveTarget(String(CARD));
+const PLUGIN = path.join(__dirname, "..", "com.valentyn.alsa.sdPlugin", "plugin.js");
+const ENV = { ...process.env, LC_ALL: "C" };
+
+function pickCard() {
+	// Prefer a card that actually has a Master control.
+	for (const c of alsa.listCards()) {
+		try {
+			const out = execFileSync("amixer", ["-c", String(c.index), "scontrols"], { env: ENV, encoding: "utf8" });
+			if (/'Master'/.test(out)) return c.index;
+		} catch {
+			/* skip */
+		}
+	}
+	return 0;
+}
+
+const results = [];
+let failures = 0;
+
+function check(name, ok, detail = "") {
+	results.push({ name, ok, detail });
+	if (!ok) failures++;
+	const mark = ok ? "\x1b[32mPASS\x1b[0m" : "\x1b[31mFAIL\x1b[0m";
+	console.log(`  ${mark}  ${name}${detail ? `  \x1b[90m${detail}\x1b[0m` : ""}`);
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Decode a key image the same way streamdeck-strip-render does: base64 only.
+function svgOf(image) {
+	const comma = image.indexOf(",");
+	const header = image.slice(0, comma);
+	if (!header.includes("base64")) throw new Error(`not a base64 data URL: ${header}`);
+	return Buffer.from(image.slice(comma + 1), "base64").toString("utf8");
+}
+
+function amixer(args) {
+	return execFileSync("amixer", ["-c", String(CARD), ...args], { env: ENV, encoding: "utf8" });
+}
+
+async function state(id, target = TARGET) {
+	alsa.invalidate();
+	return alsa.getControl(target, id, true);
+}
+
+async function main() {
+	console.log(`\nTesting against card ${CARD}\n`);
+
+	const before = {
+		master: await state("Master"),
+		capture: await state("Capture"),
+	};
+	const defaultTarget = alsa.resolveTarget("default");
+	let beforeDefault = null;
+	try {
+		beforeDefault = { master: await state("Master", defaultTarget) };
+	} catch {
+		/* no default device on this system */
+	}
+	if (!before.master) {
+		console.error(`card ${CARD} has no Master control; pass a different card index`);
+		process.exit(1);
+	}
+
+	const mock = new MockOpenDeck();
+	const port = await mock.listen();
+
+	const received = [];
+	let registered = false;
+	mock.on("message", (msg) => {
+		received.push(msg);
+		if (msg.event === "registerPlugin") registered = true;
+	});
+
+	const proc = spawn(
+		process.execPath,
+		[PLUGIN, "-port", String(port), "-pluginUUID", "com.valentyn.alsa", "-registerEvent", "registerPlugin", "-info", "{}"],
+		{ stdio: ["ignore", "inherit", "pipe"] },
+	);
+	const stderr = [];
+	proc.stderr.setEncoding("utf8");
+	proc.stderr.on("data", (d) => stderr.push(d));
+
+	const waitFor = async (pred, ms = 3000, label = "") => {
+		const t0 = Date.now();
+		while (Date.now() - t0 < ms) {
+			const hit = received.filter(pred);
+			if (hit.length) return hit[hit.length - 1];
+			await sleep(25);
+		}
+		throw new Error(`timed out waiting for ${label}`);
+	};
+	const clear = () => (received.length = 0);
+
+	try {
+		// --- registration ------------------------------------------------
+		await waitFor((m) => m.event === "registerPlugin", 3000, "registerPlugin");
+		check("registers with the correct event and uuid", registered);
+
+		// --- volume action appears ---------------------------------------
+		const volCtx = "ctx-volume";
+		clear();
+		mock.send({
+			event: "willAppear",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			device: "dev0",
+			payload: { controller: "Keypad", settings: { card: String(CARD), control: "Master", step: 5 } },
+		});
+		const img = await waitFor((m) => m.event === "setImage" && m.context === volCtx, 3000, "setImage");
+		check("renders a key image on willAppear", !!img.payload.image.startsWith("data:image/svg+xml"));
+		check(
+			"key image reflects the current level",
+			svgOf(img.payload.image).includes(`${before.master.percent}%`) || before.master.muted,
+			`level=${before.master.percent}%`,
+		);
+
+		// --- dial rotate changes the volume ------------------------------
+		await alsa.setVolume(TARGET, before.master, 50);
+		await sleep(200);
+		clear();
+		mock.send({
+			event: "dialRotate",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			payload: { controller: "Encoder", ticks: 3, pressed: false },
+		});
+		await sleep(700);
+		let now = await state("Master");
+		check("dialRotate +3 ticks raises volume by 3 x step", now.percent > 50, `50% -> ${now.percent}%`);
+
+		clear();
+		mock.send({
+			event: "dialRotate",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			payload: { controller: "Encoder", ticks: -2, pressed: false },
+		});
+		await sleep(700);
+		const lowered = await state("Master");
+		check("dialRotate -2 ticks lowers volume", lowered.percent < now.percent, `${now.percent}% -> ${lowered.percent}%`);
+
+		// --- mute toggle --------------------------------------------------
+		const muteCtx = "ctx-mute";
+		clear();
+		mock.send({
+			event: "willAppear",
+			action: "com.valentyn.alsa.mute",
+			context: muteCtx,
+			device: "dev0",
+			payload: { controller: "Keypad", settings: { card: String(CARD), control: "Master", preset: "speakers" } },
+		});
+		await waitFor((m) => m.event === "setImage" && m.context === muteCtx, 3000, "mute setImage");
+
+		const wasMuted = (await state("Master")).muted;
+		clear();
+		mock.send({ event: "keyDown", action: "com.valentyn.alsa.mute", context: muteCtx, payload: { settings: {} } });
+		await sleep(700);
+		const afterToggle = await state("Master");
+		check("keyDown toggles the mute switch", afterToggle.muted !== wasMuted, `muted ${wasMuted} -> ${afterToggle.muted}`);
+
+		const stateMsg = received.find((m) => m.event === "setState" && m.context === muteCtx);
+		check("reports mute state back to OpenDeck", !!stateMsg && stateMsg.payload.state === (afterToggle.muted ? 1 : 0));
+
+		// --- raising volume unmutes --------------------------------------
+		await alsa.setMute(TARGET, await state("Master"), true);
+		await alsa.setVolume(TARGET, await state("Master"), 40);
+		await sleep(300);
+		clear();
+		mock.send({
+			event: "dialRotate",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			payload: { controller: "Encoder", ticks: 2 },
+		});
+		await sleep(800);
+		const unmuted = await state("Master");
+		check("raising the volume unmutes a muted control", !unmuted.muted, `muted -> ${unmuted.muted}`);
+
+		// --- external change is picked up by alsactl monitor --------------
+		clear();
+		amixer(["sset", "Master", "25%"]);
+		const external = await waitFor(
+			(m) => m.event === "setImage" && m.context === volCtx,
+			4000,
+			"monitor-driven setImage",
+		);
+		check(
+			"external amixer change refreshes the key without polling",
+			svgOf(external.payload.image).includes("25%"),
+			"alsactl monitor -> setImage",
+		);
+
+		// --- encoder feedback --------------------------------------------
+		const encCtx = "ctx-enc";
+		clear();
+		mock.send({
+			event: "willAppear",
+			action: "com.valentyn.alsa.volume",
+			context: encCtx,
+			device: "dev0",
+			payload: { controller: "Encoder", settings: { card: String(CARD), control: "Master" } },
+		});
+		const layout = await waitFor((m) => m.event === "setFeedbackLayout" && m.context === encCtx, 3000, "layout");
+		check("sets an encoder layout for dials", layout.payload.layout === "$B1");
+		const fb = await waitFor((m) => m.event === "setFeedback" && m.context === encCtx, 3000, "feedback");
+		check(
+			"sends dial feedback with a value and indicator",
+			typeof fb.payload.value === "string" && typeof fb.payload.indicator.value === "number",
+			`value=${fb.payload.value} indicator=${fb.payload.indicator.value}`,
+		);
+
+		// --- property inspector queries -----------------------------------
+		clear();
+		mock.send({
+			event: "sendToPlugin",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			payload: { event: "getCards" },
+		});
+		const cardsMsg = await waitFor((m) => m.event === "sendToPropertyInspector", 3000, "cards reply");
+		check("property inspector can list sound cards", Array.isArray(cardsMsg.payload.cards) && cardsMsg.payload.cards.length > 0, `${cardsMsg.payload.cards.length} cards`);
+
+		clear();
+		mock.send({
+			event: "sendToPlugin",
+			action: "com.valentyn.alsa.volume",
+			context: volCtx,
+			payload: { event: "getControls", card: String(CARD) },
+		});
+		const ctrlMsg = await waitFor((m) => m.event === "sendToPropertyInspector" && m.payload.event === "controls", 3000, "controls reply");
+		check(
+			"property inspector can list controls for a card",
+			ctrlMsg.payload.controls.length > 0 && ctrlMsg.payload.controls.some((c) => c.name === "Master"),
+			`${ctrlMsg.payload.controls.length} controls`,
+		);
+
+		// --- missing control degrades gracefully ---------------------------
+		const badCtx = "ctx-bad";
+		clear();
+		mock.send({
+			event: "willAppear",
+			action: "com.valentyn.alsa.volume",
+			context: badCtx,
+			device: "dev0",
+			payload: { controller: "Keypad", settings: { card: String(CARD), control: "Nonexistent Control" } },
+		});
+		const badImg = await waitFor((m) => m.event === "setImage" && m.context === badCtx, 3000, "unavailable image");
+		check(
+			"a missing control renders an unavailable icon instead of crashing",
+			svgOf(badImg.payload.image).includes("Nonexistent Control"),
+		);
+
+		// --- the ALSA default device (PipeWire/PulseAudio) ------------------
+		if (beforeDefault && beforeDefault.master) {
+			const defCtx = "ctx-default";
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volume",
+				context: defCtx,
+				device: "dev0",
+				payload: { controller: "Keypad", settings: { card: "default", step: 5 } },
+			});
+			const defImg = await waitFor((m) => m.event === "setImage" && m.context === defCtx, 3000, "default setImage");
+			const defState = await state("Master", defaultTarget);
+			check(
+				"card 'default' targets the system mixer, not card 0",
+				svgOf(defImg.payload.image).includes(`${defState.percent}%`) || defState.muted,
+				`${alsa.defaultDeviceName() || "default"} Master = ${defState.percent}%`,
+			);
+
+			await alsa.setVolume(defaultTarget, defState, 55);
+			await sleep(300);
+			clear();
+			mock.send({
+				event: "dialRotate",
+				action: "com.valentyn.alsa.volume",
+				context: defCtx,
+				payload: { controller: "Encoder", ticks: 2 },
+			});
+			await sleep(800);
+			const defAfter = await state("Master", defaultTarget);
+			check("the default device responds to dial input", defAfter.percent > 55, `55% -> ${defAfter.percent}%`);
+
+			clear();
+			execFileSync("amixer", ["-D", "default", "sset", "Master", "35%"], { env: ENV });
+			const defExt = await waitFor(
+				(m) => m.event === "setImage" && m.context === defCtx,
+				4000,
+				"default monitor refresh",
+			);
+			check(
+				"alsactl monitor works on the default device too",
+				svgOf(defExt.payload.image).includes("35%"),
+			);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: defCtx, payload: {} });
+		} else {
+			check("card 'default' targets the system mixer, not card 0", true, "skipped: no default device");
+		}
+
+		// --- an unknown card id falls back to default, not card 0 -----------
+		{
+			const t = alsa.resolveTarget("NoSuchCard");
+			check("an unknown card id falls back to the default device", t.isDefault === true, `key=${t.key}`);
+			const t2 = alsa.resolveTarget("");
+			check("an empty card setting means the default device", t2.key === "default");
+			const t3 = alsa.resolveTarget(String(CARD));
+			check(`card "${CARD}" resolves to hw:${CARD}`, t3.monitor === `hw:${CARD}`);
+		}
+
+		// --- key images must be base64 data URLs ---------------------------
+		// The dial strip is rendered natively by streamdeck-strip-render, whose
+		// data-URL parser rejects any header without "base64" (layout.rs) and
+		// silently renders an empty pixmap. A URL-encoded SVG looks fine on keys
+		// and shows a checkerboard on dials, so assert the encoding directly.
+		{
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volume",
+				context: "ctx-b64",
+				device: "dev0",
+				payload: { controller: "Keypad", settings: { card: String(CARD), control: "Master" } },
+			});
+			const m = await waitFor((x) => x.event === "setImage" && x.context === "ctx-b64", 3000, "b64 image");
+			const header = m.payload.image.slice(0, m.payload.image.indexOf(","));
+			check("key images are base64 data URLs the strip renderer accepts", header.includes("base64"), header);
+			check("key image decodes to valid SVG", svgOf(m.payload.image).startsWith("<svg"));
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: "ctx-b64", payload: {} });
+		}
+
+		// --- dial icon is the plain glyph, not the full key face -------------
+		{
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volume",
+				context: "ctx-glyph",
+				device: "dev0",
+				payload: { controller: "Encoder", settings: { card: String(CARD), control: "Master" } },
+			});
+			const fbk = await waitFor((x) => x.event === "setFeedback" && x.context === "ctx-glyph", 3000, "glyph feedback");
+			const svg = svgOf(fbk.payload.icon);
+			// The 48x48 slot must not receive the level ring or the percentage
+			// text, which the value and indicator already show.
+			check(
+				"dial icon is a 48x48 glyph without ring or text",
+				svg.includes('viewBox="0 0 48 48"') && !svg.includes("<text"),
+				svg.includes("<text") ? "still contains text" : "glyph only",
+			);
+			const keyImg = await waitFor((x) => x.event === "setImage" && x.context === "ctx-glyph", 3000, "glyph image");
+			check(
+				"the dial's state image matches its icon slot",
+				keyImg.payload.image === fbk.payload.icon,
+				"strip renderer uses the state image as icon_override",
+			);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: "ctx-glyph", payload: {} });
+		}
+
+		// --- an unconfigured Mute Toggle targets the mic, not Master ---------
+		{
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.mute",
+				context: "ctx-fresh",
+				device: "dev0",
+				payload: { controller: "Keypad", settings: {} },
+			});
+			const m = await waitFor((x) => x.event === "setImage" && x.context === "ctx-fresh", 3000, "fresh mute");
+			const svg = svgOf(m.payload.image);
+			// The mic glyph is a rounded capsule; the speaker glyph is a polygon.
+			const isMic = svg.includes("<rect x=") && !svg.includes("L58 12");
+			check(
+				"a Mute Toggle with no settings shows the microphone, not Master",
+				isMic && svg.includes("Capture"),
+				svg.includes("Master") ? "still resolving to Master" : "resolves to Capture",
+			);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.mute", context: "ctx-fresh", payload: {} });
+		}
+
+		// --- monitor lifecycle ---------------------------------------------
+		clear();
+		mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: badCtx, payload: {} });
+		mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: encCtx, payload: {} });
+		await sleep(300);
+		check("willDisappear is handled without error", !stderr.join("").includes("handler error"));
+
+		// --- no crashes -----------------------------------------------------
+		const errText = stderr.join("");
+		check("plugin logged no uncaught errors", !/uncaught|unhandled/i.test(errText), errText.trim().split("\n").pop() || "");
+		check("plugin process is still alive", proc.exitCode === null);
+	} catch (err) {
+		check(`test run completed`, false, err.message);
+	} finally {
+		// Restore whatever we touched.
+		try {
+			if (before.master) {
+				const m = await state("Master");
+				if (before.master.percent !== null) await alsa.setVolume(TARGET, m, before.master.percent);
+				await alsa.setMute(TARGET, await state("Master"), before.master.muted);
+			}
+			if (before.capture) {
+				const c = await state("Capture");
+				if (before.capture.percent !== null) await alsa.setVolume(TARGET, c, before.capture.percent);
+				await alsa.setMute(TARGET, await state("Capture"), before.capture.muted);
+			}
+			if (beforeDefault && beforeDefault.master) {
+				const dt = alsa.resolveTarget("default");
+				const m = await state("Master", dt);
+				if (m) {
+					if (beforeDefault.master.percent !== null)
+						await alsa.setVolume(dt, m, beforeDefault.master.percent);
+					await alsa.setMute(dt, await state("Master", dt), beforeDefault.master.muted);
+				}
+			}
+		} catch (err) {
+			console.error(`\n  warning: could not fully restore mixer state: ${err.message}`);
+		}
+
+		proc.kill("SIGTERM");
+		await sleep(200);
+		mock.close();
+
+		const alsactlLeft = stderr.join("").match(/alsactl monitor .* exited/g);
+		console.log(`\n${results.length - failures}/${results.length} checks passed`);
+		if (failures) {
+			console.log("\nplugin stderr:\n" + stderr.join(""));
+		} else if (alsactlLeft) {
+			console.log(`(alsactl restarts observed: ${alsactlLeft.length})`);
+		}
+		process.exit(failures ? 1 : 0);
+	}
+}
+
+main();

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="stylesheet" href="styles.css" />
+		<script src="alsa-pi.js"></script>
+	</head>
+	<body>
+		<div class="sdpi-wrapper">
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Target</div>
+				<select class="sdpi-item-value select" id="preset">
+					<option value="mic">Microphone</option>
+					<option value="speakers">Speakers</option>
+					<option value="custom">Custom control</option>
+				</select>
+			</div>
+			<div class="hint" id="presetHint"></div>
+
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Sound card</div>
+				<select class="sdpi-item-value select" id="card"></select>
+			</div>
+
+			<div class="sdpi-item">
+				<div class="sdpi-item-label">Control</div>
+				<select class="sdpi-item-value select" id="control"></select>
+			</div>
+
+			<details class="sdpi-item">
+				<summary>Advanced</summary>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Label</div>
+					<input class="sdpi-item-value" id="label" placeholder="control name" />
+				</div>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Show label</div>
+					<input id="showLabel" type="checkbox" class="sdpi-item-value" />
+				</div>
+				<div class="sdpi-item">
+					<div class="sdpi-item-label">Show all controls</div>
+					<input id="showAll" type="checkbox" class="sdpi-item-value" />
+				</div>
+				<div class="hint">
+					By default only controls that can actually be muted are listed. Enable this to also pick controls without a
+					mute switch — those are muted by dropping the level to 0 and restored on unmute.
+				</div>
+			</details>
+
+			<div class="status" id="status"></div>
+		</div>
+
+		<script>
+			function onPropertyInspectorReady(pi) {
+				const $ = (id) => document.getElementById(id);
+				// Persist the form's own defaults so a never-edited action behaves
+				// the way this panel says it does.
+				pi.applyDefaults({ preset: "mic", kind: "capture", card: "default", control: "" });
+				const s = pi.settings;
+
+				$("preset").value = s.preset ?? "mic";
+				$("label").value = s.label ?? "";
+				$("showLabel").checked = s.showLabel !== false;
+				$("showAll").checked = !!s.showAll;
+
+				const HINTS = {
+					mic: "Mutes the capture side — usually the 'Capture' control, the same one alsamixer shows under F4.",
+					speakers: "Mutes playback — usually 'Master', the same one alsamixer shows under F3.",
+					custom: "Pick any control on the card yourself.",
+				};
+
+				function syncHint() {
+					$("presetHint").textContent = HINTS[$("preset").value] || "";
+				}
+				syncHint();
+
+				// Presets steer both the icon (mic vs speaker) and which control is
+				// auto-selected when none is chosen explicitly.
+				$("preset").addEventListener("change", (e) => {
+					const v = e.target.value;
+					pi.set("preset", v);
+					if (v !== "custom") {
+						pi.set("kind", v === "mic" ? "capture" : "playback");
+						pi.set("control", "");
+					} else {
+						pi.set("kind", "");
+					}
+					syncHint();
+					renderControls(pi.controls);
+				});
+
+				$("card").addEventListener("change", (e) => {
+					pi.set("card", e.target.value);
+					pi.set("control", "");
+					pi.requestControls(e.target.value);
+				});
+				$("control").addEventListener("change", (e) => {
+					pi.set("control", e.target.value);
+					// Choosing a control by hand implies a custom target.
+					if (e.target.value && $("preset").value !== "custom") {
+						$("preset").value = "custom";
+						pi.set("preset", "custom");
+						pi.set("kind", "");
+						syncHint();
+					}
+				});
+				$("label").addEventListener("input", (e) => pi.set("label", e.target.value));
+				$("showLabel").addEventListener("change", (e) => pi.set("showLabel", e.target.checked));
+				$("showAll").addEventListener("change", (e) => {
+					pi.set("showAll", e.target.checked);
+					renderControls(pi.controls);
+				});
+
+				function renderControls(controls) {
+					const showAll = $("showAll").checked;
+					const preset = $("preset").value;
+					let usable = controls.filter((c) => showAll || c.hasSwitch || c.isEnum);
+					if (!showAll && preset === "mic") {
+						const capture = usable.filter((c) => c.kind === "capture");
+						if (capture.length) usable = capture;
+					}
+					const autoLabel =
+						preset === "mic" ? "Auto (Capture)" : preset === "speakers" ? "Auto (Master)" : "Auto";
+					pi.fill(
+						$("control"),
+						usable.map((c) => ({
+							value: c.id,
+							label:
+								`${c.name}${c.kind === "capture" ? " (capture)" : ""}` +
+								(c.isEnum ? " — enum" : c.hasSwitch ? (c.muted ? " — muted" : " — on") : " — no switch"),
+						})),
+						pi.settings.control ?? "",
+						autoLabel,
+					);
+					$("status").textContent = usable.length
+						? `${usable.length} control${usable.length === 1 ? "" : "s"} available.`
+						: "No mutable controls on this card — enable 'Show all controls' to pick one anyway.";
+				}
+
+				pi.onControls(renderControls);
+			}
+		</script>
+	</body>
+</html>

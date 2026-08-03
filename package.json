@@ -1,0 +1,37 @@
+{
+	"name": "opendeck-alsa",
+	"version": "1.0.0",
+	"description": "Native ALSA mixer plugin for OpenDeck: mute the mic or speakers and drive volume with knobs",
+	"license": "GPL-3.0-or-later",
+	"author": "Valentyn Pavliuchenko",
+	"homepage": "https://github.com/constrictor/opendeck-alsa#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/constrictor/opendeck-alsa.git"
+	},
+	"bugs": {
+		"url": "https://github.com/constrictor/opendeck-alsa/issues"
+	},
+	"keywords": [
+		"opendeck",
+		"streamdeck",
+		"alsa",
+		"amixer",
+		"linux",
+		"audio",
+		"volume",
+		"mute"
+	],
+	"private": true,
+	"engines": {
+		"node": ">=22"
+	},
+	"os": [
+		"linux"
+	],
+	"scripts": {
+		"install-plugin": "./install.sh",
+		"test": "node tools/test-plugin.js",
+		"icons": "node tools/gen-icons.js"
+	}
+}

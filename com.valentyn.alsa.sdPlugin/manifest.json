@@ -1,0 +1,68 @@
+{
+	"Name": "ALSA Mixer",
+	"Description": "Control ALSA sound cards natively: mute the mic or speakers, and drive volume with knobs. Any control on any card, live-synced with alsamixer.",
+	"Author": "Valentyn Pavliuchenko",
+	"Version": "1.0.0",
+	"SDKVersion": 2,
+	"URL": "https://github.com/constrictor/opendeck-alsa",
+	"CodePath": "plugin.js",
+	"CodePathLin": "plugin.js",
+	"Icon": "icons/plugin",
+	"Category": "ALSA",
+	"CategoryIcon": "icons/plugin",
+	"OS": [
+		{
+			"Platform": "linux",
+			"MinimumVersion": "0"
+		}
+	],
+	"Software": {
+		"MinimumVersion": "6.0"
+	},
+	"Actions": [
+		{
+			"Icon": "icons/volume",
+			"Name": "Volume",
+			"States": [
+				{ "Image": "icons/volume", "TitleAlignment": "bottom" },
+				{ "Image": "icons/volumeMuted", "TitleAlignment": "bottom" }
+			],
+			"Controllers": ["Keypad", "Encoder"],
+			"Encoder": {
+				"layout": "$B1",
+				"StackColor": "#5b9dff",
+				"TriggerDescription": {
+					"Rotate": "Adjust volume",
+					"Push": "Toggle mute",
+					"Touch": "Toggle mute"
+				}
+			},
+			"SupportedInMultiActions": true,
+			"Tooltip": "Adjust the volume of any ALSA control",
+			"UUID": "com.valentyn.alsa.volume",
+			"PropertyInspectorPath": "propertyInspector/volume.html"
+		},
+		{
+			"Icon": "icons/mute",
+			"Name": "Mute Toggle",
+			"States": [
+				{ "Image": "icons/mute", "TitleAlignment": "bottom" },
+				{ "Image": "icons/muteMuted", "TitleAlignment": "bottom" }
+			],
+			"Controllers": ["Keypad", "Encoder"],
+			"Encoder": {
+				"layout": "$B1",
+				"StackColor": "#e5484d",
+				"TriggerDescription": {
+					"Rotate": "Mute / unmute",
+					"Push": "Toggle mute",
+					"Touch": "Toggle mute"
+				}
+			},
+			"SupportedInMultiActions": true,
+			"Tooltip": "Mute or unmute a microphone, speakers, or any ALSA control",
+			"UUID": "com.valentyn.alsa.mute",
+			"PropertyInspectorPath": "propertyInspector/mute.html"
+		}
+	]
+}
