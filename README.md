@@ -7,6 +7,8 @@
 A native Linux plugin for [OpenDeck](https://github.com/nekename/OpenDeck) that drives ALSA
 mixer controls directly.
 
+![Key faces and the dial touchstrip](docs/showcase.svg)
+
 - **Mute buttons** for the microphone, the speakers, or any other control.
 - **Volume knobs** — dial rotation adjusts the level, pressing the dial mutes.
 - **Any control, any card.** Each action picks its own sound card and control,
@@ -101,6 +103,13 @@ npm run icons          # or: node tools/gen-icons.js
 
 That script contains a small supersampled rasteriser and a PNG encoder written
 against `node:zlib`, so it needs no image tooling installed.
+
+The README's showcase image is generated too, straight from `lib/icons.js`, so
+it cannot drift from what the plugin actually draws:
+
+```sh
+npm run showcase       # or: node tools/gen-showcase.js
+```
 
 Live key images are *not* built ahead of time — `lib/icons.js` renders them as
 SVG at draw time so they can reflect the current level and mute state.
@@ -220,6 +229,7 @@ already next to it.
 ```sh
 node tools/test-plugin.js [cardIndex]   # end-to-end test against real hardware
 node tools/gen-icons.js                 # regenerate the static PNGs
+node tools/gen-showcase.js              # regenerate docs/showcase.svg
 ```
 
 `tools/test-plugin.js` is an end-to-end test, not a unit test: it spawns the
@@ -251,6 +261,7 @@ com.valentyn.alsa.sdPlugin/
     └── mute.html
 tools/
 ├── gen-icons.js              # PNG rasteriser and encoder (build-time)
+├── gen-showcase.js           # builds docs/showcase.svg from lib/icons.js
 ├── mock-opendeck.js          # minimal WebSocket server for testing
 └── test-plugin.js            # end-to-end test
 ```
