@@ -43,6 +43,30 @@
 			"PropertyInspectorPath": "propertyInspector/volume.html"
 		},
 		{
+			"Icon": "icons/volumeUp",
+			"Name": "Volume Up",
+			"States": [
+				{ "Image": "icons/volumeUp", "TitleAlignment": "bottom" }
+			],
+			"Controllers": ["Keypad"],
+			"SupportedInMultiActions": true,
+			"Tooltip": "Raise the volume of any ALSA control; hold to keep raising",
+			"UUID": "com.valentyn.alsa.volumeUp",
+			"PropertyInspectorPath": "propertyInspector/volumeStep.html"
+		},
+		{
+			"Icon": "icons/volumeDown",
+			"Name": "Volume Down",
+			"States": [
+				{ "Image": "icons/volumeDown", "TitleAlignment": "bottom" }
+			],
+			"Controllers": ["Keypad"],
+			"SupportedInMultiActions": true,
+			"Tooltip": "Lower the volume of any ALSA control; hold to keep lowering",
+			"UUID": "com.valentyn.alsa.volumeDown",
+			"PropertyInspectorPath": "propertyInspector/volumeStep.html"
+		},
+		{
 			"Icon": "icons/mute",
 			"Name": "Mute Toggle",
 			"States": [

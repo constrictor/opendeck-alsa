@@ -19,8 +19,25 @@ const { WebSocket } = require("./lib/ws.js");
 
 const ACTION_VOLUME = "com.valentyn.alsa.volume";
 const ACTION_MUTE = "com.valentyn.alsa.mute";
+const ACTION_VOLUME_UP = "com.valentyn.alsa.volumeUp";
+const ACTION_VOLUME_DOWN = "com.valentyn.alsa.volumeDown";
+
+// The only thing separating the two one-directional volume keys from each other,
+// and from the Volume action, is the sign of the step — so that is all this
+// table holds. Everything else about them is the Volume action's behaviour.
+const STEP_DIRECTION = {
+	[ACTION_VOLUME_UP]: 1,
+	[ACTION_VOLUME_DOWN]: -1,
+};
 
 const REFRESH_DEBOUNCE_MS = 60;
+
+// Hold-to-repeat for the one-directional volume keys, roughly a keyboard's
+// key-repeat feel. REPEAT_MAX bounds a runaway hold: OpenDeck normally sends a
+// keyUp, but a lost one must not leave a timer stepping the mixer forever.
+const REPEAT_DELAY_MS = 400;
+const REPEAT_INTERVAL_MS = 150;
+const REPEAT_MAX = 60; // ~9s of holding, 300 points at the default step
 
 function log(...args) {
 	process.stderr.write(`[alsa] ${args.join(" ")}\n`);
@@ -88,6 +105,7 @@ class Plugin {
 	}
 
 	shutdown() {
+		for (const inst of this.contexts.values()) this.stopRepeat(inst);
 		this.monitor.stopAll();
 		if (this.pollTimer) clearInterval(this.pollTimer);
 	}
@@ -105,7 +123,8 @@ class Plugin {
 			case "keyDown":
 				return this.onKeyDown(msg);
 			case "keyUp":
-				return; // acted on keyDown for responsiveness
+				// Acted on keyDown for responsiveness; keyUp only ends a hold.
+				return this.onKeyUp(msg);
 			case "dialRotate":
 				return this.onDialRotate(msg);
 			case "dialDown":
@@ -135,6 +154,8 @@ class Plugin {
 			target: null,
 			queue: Promise.resolve(),
 			pendingDelta: 0,
+			repeatTimer: null,
+			repeatGen: 0,
 		};
 		this.contexts.set(msg.context, inst);
 		this.bindMonitor(inst);
@@ -147,6 +168,7 @@ class Plugin {
 	onWillDisappear(msg) {
 		const inst = this.contexts.get(msg.context);
 		if (!inst) return;
+		this.stopRepeat(inst);
 		if (inst.target) this.monitor.release(inst.target);
 		this.contexts.delete(msg.context);
 	}
@@ -176,6 +198,15 @@ class Plugin {
 	async onKeyDown(msg) {
 		const inst = this.contexts.get(msg.context);
 		if (!inst) return;
+
+		const dir = STEP_DIRECTION[inst.action];
+		if (dir) {
+			// A multi-action presses the key programmatically and may never send a
+			// matching keyUp, so it gets exactly one step and no repeat.
+			if (msg.payload && msg.payload.isInMultiAction) return this.doAdjust(inst, dir * this.stepOf(inst));
+			return this.startRepeat(inst, dir);
+		}
+
 		if (inst.action === ACTION_MUTE) return this.doMute(inst);
 
 		const mode = inst.settings.keyAction || "toggleMute";
@@ -183,6 +214,12 @@ class Plugin {
 		if (mode === "set") return this.doSetVolume(inst, Number(inst.settings.setTo ?? 50));
 		const step = this.stepOf(inst);
 		return this.doAdjust(inst, mode === "down" ? -step : step);
+	}
+
+	onKeyUp(msg) {
+		const inst = this.contexts.get(msg.context);
+		if (!inst) return;
+		this.stopRepeat(inst);
 	}
 
 	async onDialRotate(msg) {
@@ -209,6 +246,45 @@ class Plugin {
 	stepOf(inst) {
 		const n = Number(inst.settings.step);
 		return Number.isFinite(n) && n > 0 ? n : 5;
+	}
+
+	// Hold-to-repeat. The first step fires immediately so a tap feels instant,
+	// then each tick re-arms only *after* its write has finished, so a slow
+	// amixer throttles the repeat instead of letting calls pile up. A generation
+	// counter rather than the timer handle marks a loop dead, because a tick that
+	// is already awaiting a write has no timer left to clear.
+	startRepeat(inst, direction) {
+		this.stopRepeat(inst); // a duplicate keyDown must not start a second loop
+		const gen = ++inst.repeatGen;
+		const live = () => inst.repeatGen === gen && this.contexts.get(inst.context) === inst;
+		let fired = 1;
+
+		const arm = (wait) => {
+			inst.repeatTimer = setTimeout(async () => {
+				inst.repeatTimer = null;
+				if (!live()) return;
+				await this.doAdjust(inst, direction * this.stepOf(inst));
+				if (!live()) return;
+				if (++fired >= REPEAT_MAX) {
+					log(`${inst.action} ${inst.context}: repeat limit reached, stopping (missed keyUp?)`);
+					return;
+				}
+				arm(REPEAT_INTERVAL_MS);
+			}, wait);
+		};
+
+		const first = this.doAdjust(inst, direction * this.stepOf(inst));
+		arm(REPEAT_DELAY_MS);
+		return first;
+	}
+
+	stopRepeat(inst) {
+		if (!inst) return;
+		inst.repeatGen = (inst.repeatGen || 0) + 1; // invalidate an in-flight tick
+		if (inst.repeatTimer) {
+			clearTimeout(inst.repeatTimer);
+			inst.repeatTimer = null;
+		}
 	}
 
 	// Serialise writes per instance and coalesce rotation bursts, so spinning a
@@ -322,6 +398,7 @@ class Plugin {
 		}
 
 		const isMute = inst.action === ACTION_MUTE;
+		const dir = STEP_DIRECTION[inst.action] || 0;
 		const label = this.labelFor(inst, control);
 
 		if (!control) {
@@ -352,10 +429,15 @@ class Plugin {
 			? icons.glyphIcon(state)
 			: isMute
 				? icons.muteIcon(state)
-				: icons.volumeIcon(state);
+				: dir
+					? icons.volumeStepIcon(state, dir)
+					: icons.volumeIcon(state);
 
 		this.send({ event: "setImage", context: inst.context, payload: { image, target: 0 } });
-		this.send({ event: "setState", context: inst.context, payload: { state: state.muted ? 1 : 0 } });
+		// Volume Up / Down never toggle anything, so their manifest entry declares a
+		// single state and state 1 would be out of range. Their muted look is
+		// carried entirely by the rendered image.
+		if (!dir) this.send({ event: "setState", context: inst.context, payload: { state: state.muted ? 1 : 0 } });
 
 		if (isEncoder) {
 			const value = control.isEnum

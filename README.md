@@ -11,6 +11,7 @@ mixer controls directly.
 
 - **Mute buttons** for the microphone, the speakers, or any other control.
 - **Volume knobs** — dial rotation adjusts the level, pressing the dial mutes.
+- **Volume Up / Down keys** — one direction per key, hold to keep stepping.
 - **Any control, any card.** Each action picks its own sound card and control,
   from the same list `alsamixer` shows after pressing <kbd>F6</kbd>.
 - **Live sync.** Change the volume in `alsamixer`, with a media key, or from
@@ -133,6 +134,27 @@ Adjusts the level of any control that has one.
 
 On a dial: rotate to adjust, push or tap to mute.
 
+### Volume Up / Volume Down
+
+Two keys that only ever go one way. They need no configuration at all: drop one
+on a key and it steps `Master` on the default device by 5% a press.
+
+| Setting | Meaning |
+|---|---|
+| Sound card | The default device, or a specific hardware card |
+| Control | Any control with an adjustable level; `Auto` picks `Master` |
+| Step | Percentage points per press, and per repeat while held (default 5) |
+| Label | Overrides the caption drawn on the key |
+| Unmute on raise | *(Volume Up)* Raising a muted control unmutes it (on by default) |
+| Volume scale | As for the Volume action |
+
+**Hold to repeat.** A press steps once; holding for 400 ms starts repeating
+every 150 ms, and releasing stops it. Inside a multi-action there is no repeat —
+a programmatic press gets exactly one step, since it may never send a `keyUp`.
+
+These are keys only. A one-directional dial makes no sense — put the **Volume**
+action on an encoder instead.
+
 ### Mute Toggle
 
 Toggles a mute switch.
@@ -198,6 +220,10 @@ card); everything below works the same for both.
   `cap`/`nocap` rather than `on`/`off`.
 - **Rotation is coalesced.** Spinning a dial fast accumulates the pending delta
   and issues one `amixer` call at a time instead of dozens of concurrent ones.
+- **Held keys repeat safely.** A Volume Up / Down repeat re-arms only after the
+  previous `amixer` write has finished, so holding a key cannot outrun the
+  hardware or queue an unbounded pile of calls. It also stops on `willDisappear`
+  and gives up after 60 steps, in case a `keyUp` is ever lost.
 - **Controls are cached for 400 ms**, so a burst of change events costs one read.
 - **An unknown card falls back to the default device**, never to card 0 — if a
   card index shifts after a reboot, a mute button lands on the system mixer
@@ -264,6 +290,7 @@ com.valentyn.alsa.sdPlugin/
     ├── alsa-pi.js            # shared settings + live card/control lists
     ├── styles.css
     ├── volume.html
+    ├── volumeStep.html       # shared by Volume Up and Volume Down
     └── mute.html
 tools/
 ├── gen-icons.js              # PNG rasteriser and encoder (build-time)

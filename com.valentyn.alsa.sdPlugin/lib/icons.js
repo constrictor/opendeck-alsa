@@ -119,6 +119,54 @@ function volumeIcon(state) {
 	return dataUri(wrap(`${ring(muted ? 0 : percent)}${glyph}${label(value, 104, 26, valueColor)}${caption}`));
 }
 
+// Direction chip for the step keys, parked in the top-right corner. A
+// background-coloured halo goes under it so it punches a clean hole through
+// whatever it lands on — the level ring, or a wide speaker arc at high volume.
+// The data-dir attribute does not render; it is what the tests assert on.
+function stepBadge(direction, muted) {
+	const cx = 112;
+	const cy = 32;
+	const r = 19;
+	const arm = 9;
+	const disc = muted ? COLORS.ring : COLORS.accent;
+	const ink = muted ? COLORS.dim : COLORS.bg;
+	const bar = (x1, y1, x2, y2) =>
+		`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${ink}" stroke-width="6" stroke-linecap="round"/>`;
+	const sign = bar(cx - arm, cy, cx + arm, cy) + (direction > 0 ? bar(cx, cy - arm, cx, cy + arm) : "");
+	return (
+		`<g data-dir="${direction > 0 ? "up" : "down"}">` +
+		`<circle cx="${cx}" cy="${cy}" r="${r + 3}" fill="none" stroke="${COLORS.bg}" stroke-width="6"/>` +
+		`<circle cx="${cx}" cy="${cy}" r="${r}" fill="${disc}"/>${sign}</g>`
+	);
+}
+
+/**
+ * Key image for a Volume Up / Volume Down key: the volume face plus a +/- chip.
+ * The glyph is smaller and lower than on a plain Volume key, and shows a single
+ * wave rather than two, to leave the top-right corner to the chip.
+ * @param {{kind: string, muted: boolean, percent: number|null, text?: string, missing?: boolean}} state
+ * @param {number} direction +1 to raise, -1 to lower
+ */
+function volumeStepIcon(state, direction) {
+	if (state.missing) return unavailableIcon(state.text);
+	const muted = !!state.muted;
+	const percent = state.percent === null ? 0 : state.percent;
+	const color = muted ? COLORS.dim : COLORS.fg;
+	const glyph =
+		state.kind === "capture"
+			? `<g transform="translate(26,18) scale(0.58)">${micGlyph(color, muted)}</g>`
+			: `<g transform="translate(22,18) scale(0.58)">${speakerGlyph(color, muted ? 0 : 1, muted)}</g>`;
+	const value = muted ? "MUTED" : `${percent}%`;
+	const valueColor = muted ? COLORS.warn : COLORS.fg;
+	const caption = state.text ? label(state.text, 128, 17, COLORS.dim) : "";
+	return dataUri(
+		wrap(
+			`${ring(muted ? 0 : percent)}${glyph}${stepBadge(direction, muted)}` +
+				`${label(value, 104, 26, valueColor)}${caption}`,
+		),
+	);
+}
+
 /**
  * Small glyph for the dial touchstrip, whose icon slot is only 48x48.
  * Deliberately plain: the layout already shows the title, the percentage and an
@@ -162,4 +210,4 @@ function unavailableIcon(text) {
 	return dataUri(wrap(`${glyph}${label(text || "no control", 118, 17, COLORS.dim)}`));
 }
 
-module.exports = { muteIcon, volumeIcon, glyphIcon, unavailableIcon, COLORS, SIZE, dataUri };
+module.exports = { muteIcon, volumeIcon, volumeStepIcon, glyphIcon, unavailableIcon, COLORS, SIZE, dataUri };

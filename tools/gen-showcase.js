@@ -70,6 +70,8 @@ function dialStrip(x, y, { title, value, percent, muted, kind }) {
 const keys = [
 	{ caption: "Volume", uri: icons.volumeIcon({ kind: "playback", muted: false, percent: 75, text: "Master" }) },
 	{ caption: "Volume, muted", uri: icons.volumeIcon({ kind: "playback", muted: true, percent: 75, text: "Master" }) },
+	{ caption: "Volume up", uri: icons.volumeStepIcon({ kind: "playback", muted: false, percent: 75, text: "Master" }, 1) },
+	{ caption: "Volume down", uri: icons.volumeStepIcon({ kind: "playback", muted: false, percent: 75, text: "Master" }, -1) },
 	{ caption: "Mic", uri: icons.muteIcon({ kind: "capture", muted: false, percent: 100, text: "Capture" }) },
 	{ caption: "Mic, muted", uri: icons.muteIcon({ kind: "capture", muted: true, percent: 100, text: "Capture" }) },
 	{ caption: "Speakers, muted", uri: icons.muteIcon({ kind: "playback", muted: true, percent: 80, text: "Master" }) },

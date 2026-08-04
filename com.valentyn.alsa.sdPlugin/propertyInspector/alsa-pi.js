@@ -155,6 +155,10 @@ const ALSA_PI = (() => {
 		get cards() {
 			return cards;
 		},
+		/** The action's UUID, so a panel shared by several actions can tell them apart. */
+		get action() {
+			return (actionInfo && actionInfo.action) || "";
+		},
 		/** "Keypad" or "Encoder" — which physical control this instance sits on. */
 		get controller() {
 			return (actionInfo && actionInfo.payload && actionInfo.payload.controller) || "Keypad";

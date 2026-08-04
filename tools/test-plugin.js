@@ -10,6 +10,7 @@
 //   node tools/test-plugin.js [cardIndex]
 
 const { spawn, execFileSync } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 const { MockOpenDeck } = require("./mock-opendeck.js");
 const alsa = require("../com.valentyn.alsa.sdPlugin/lib/alsa.js");
@@ -197,6 +198,178 @@ async function main() {
 		await sleep(800);
 		const unmuted = await state("Master");
 		check("raising the volume unmutes a muted control", !unmuted.muted, `muted -> ${unmuted.muted}`);
+
+		// --- one-directional volume keys ----------------------------------
+		// These share doAdjust with the Volume action; what is new is the badge,
+		// the single-state manifest entry and hold-to-repeat.
+		const stepSettings = { card: String(CARD), control: "Master", step: 5 };
+		const upCtx = "ctx-up";
+		const downCtx = "ctx-down";
+		{
+			await alsa.setMute(TARGET, await state("Master"), false);
+			await alsa.setVolume(TARGET, await state("Master"), 50);
+			await sleep(200);
+			// Read back rather than assuming 50: amixer snaps to the control's own
+			// raw steps, so the level the key draws is 50% only by luck.
+			const atAppear = await state("Master");
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volumeUp",
+				context: upCtx,
+				device: "dev0",
+				payload: { controller: "Keypad", settings: stepSettings },
+			});
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volumeDown",
+				context: downCtx,
+				device: "dev0",
+				payload: { controller: "Keypad", settings: stepSettings },
+			});
+			const upImg = await waitFor((m) => m.event === "setImage" && m.context === upCtx, 3000, "volumeUp image");
+			const downImg = await waitFor((m) => m.event === "setImage" && m.context === downCtx, 3000, "volumeDown image");
+			const upSvg = svgOf(upImg.payload.image);
+			const downSvg = svgOf(downImg.payload.image);
+			check(
+				"a Volume Up key shows the live level with a + badge",
+				upSvg.includes('data-dir="up"') && upSvg.includes(`${atAppear.percent}%`),
+				`badge ${upSvg.includes('data-dir="up"') ? "present" : "missing"}, level=${atAppear.percent}%`,
+			);
+			check(
+				"a Volume Down key shows a - badge, not a +",
+				downSvg.includes('data-dir="down"') && !downSvg.includes('data-dir="up"'),
+			);
+			// Their manifest entry declares one state, so setState 1 would be out
+			// of range; the muted look is carried by the image alone.
+			check(
+				"one-directional volume keys are not two-state actions",
+				!received.some((m) => m.event === "setState" && (m.context === upCtx || m.context === downCtx)),
+			);
+		}
+
+		// A tap, released before the repeat delay, is exactly one step.
+		{
+			await alsa.setVolume(TARGET, await state("Master"), 50);
+			await sleep(200);
+			clear();
+			mock.send({ event: "keyDown", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(250);
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(500);
+			const raised = await state("Master");
+			check("a tap on Volume Up raises by one step", raised.percent > 50 && raised.percent <= 60, `50% -> ${raised.percent}%`);
+
+			mock.send({ event: "keyDown", action: "com.valentyn.alsa.volumeDown", context: downCtx, payload: { settings: stepSettings } });
+			await sleep(250);
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volumeDown", context: downCtx, payload: { settings: stepSettings } });
+			await sleep(500);
+			const lowered2 = await state("Master");
+			check("a tap on Volume Down lowers by one step", lowered2.percent < raised.percent, `${raised.percent}% -> ${lowered2.percent}%`);
+		}
+
+		// Holding keeps stepping; releasing stops it.
+		{
+			await alsa.setVolume(TARGET, await state("Master"), 20);
+			await sleep(200);
+			clear();
+			mock.send({ event: "keyDown", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(1000);
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(500);
+			const held = await state("Master");
+			check("holding Volume Up keeps stepping", held.percent > 30, `20% -> ${held.percent}% while held`);
+
+			await sleep(600);
+			const settled = await state("Master");
+			check("releasing the key stops the repeat", settled.percent === held.percent, `${held.percent}% -> ${settled.percent}%`);
+		}
+
+		// The runaway-timer regression: a hold interrupted by willDisappear must
+		// not leave a timer driving the mixer.
+		{
+			const holdCtx = "ctx-up-hold";
+			await alsa.setVolume(TARGET, await state("Master"), 10);
+			await sleep(200);
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volumeUp",
+				context: holdCtx,
+				device: "dev0",
+				payload: { controller: "Keypad", settings: stepSettings },
+			});
+			await waitFor((m) => m.event === "setImage" && m.context === holdCtx, 3000, "hold ctx image");
+			mock.send({ event: "keyDown", action: "com.valentyn.alsa.volumeUp", context: holdCtx, payload: { settings: stepSettings } });
+			await sleep(700);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeUp", context: holdCtx, payload: {} });
+			await sleep(400);
+			const atRemoval = await state("Master");
+			await sleep(700);
+			const later = await state("Master");
+			check(
+				"willDisappear during a hold stops the repeat",
+				later.percent === atRemoval.percent,
+				`${atRemoval.percent}% -> ${later.percent}% after removal`,
+			);
+		}
+
+		// keyUp now has a handler; it must stay a no-op everywhere else.
+		{
+			clear();
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volume", context: volCtx, payload: { settings: {} } });
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volumeUp", context: "ctx-never-appeared", payload: {} });
+			await sleep(250);
+			check("a keyUp with no hold in progress is harmless", !stderr.join("").includes("handler error"));
+		}
+
+		// A multi-action presses the key programmatically and may never send a
+		// keyUp, so that path deliberately skips the repeat.
+		{
+			const maCtx = "ctx-up-ma";
+			await alsa.setVolume(TARGET, await state("Master"), 50);
+			await sleep(200);
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volumeUp",
+				context: maCtx,
+				device: "dev0",
+				payload: { controller: "Keypad", settings: stepSettings },
+			});
+			await waitFor((m) => m.event === "setImage" && m.context === maCtx, 3000, "multi-action image");
+			mock.send({
+				event: "keyDown",
+				action: "com.valentyn.alsa.volumeUp",
+				context: maCtx,
+				payload: { settings: stepSettings, isInMultiAction: true },
+			});
+			await sleep(1000);
+			const once = await state("Master");
+			check(
+				"a Volume Up inside a multi-action steps once and never repeats",
+				once.percent > 50 && once.percent <= 60,
+				`50% -> ${once.percent}%`,
+			);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeUp", context: maCtx, payload: {} });
+		}
+
+		// Same unmute-on-raise rule as the Volume action.
+		{
+			await alsa.setVolume(TARGET, await state("Master"), 40);
+			await alsa.setMute(TARGET, await state("Master"), true);
+			await sleep(300);
+			clear();
+			mock.send({ event: "keyDown", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(250);
+			mock.send({ event: "keyUp", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: { settings: stepSettings } });
+			await sleep(700);
+			const unmutedByStep = await state("Master");
+			check("Volume Up unmutes a muted control", !unmutedByStep.muted, `muted -> ${unmutedByStep.muted}`);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeUp", context: upCtx, payload: {} });
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeDown", context: downCtx, payload: {} });
+			await sleep(200);
+		}
 
 		// --- external change is picked up by alsactl monitor --------------
 		clear();
@@ -399,6 +572,56 @@ async function main() {
 				svg.includes("Master") ? "still resolving to Master" : "resolves to Capture",
 			);
 			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.mute", context: "ctx-fresh", payload: {} });
+		}
+
+		// --- an unconfigured Volume Up works without opening its inspector ---
+		if (beforeDefault && beforeDefault.master) {
+			clear();
+			mock.send({
+				event: "willAppear",
+				action: "com.valentyn.alsa.volumeUp",
+				context: "ctx-fresh-up",
+				device: "dev0",
+				payload: { controller: "Keypad", settings: {} },
+			});
+			const m = await waitFor((x) => x.event === "setImage" && x.context === "ctx-fresh-up", 3000, "fresh volumeUp");
+			const svg = svgOf(m.payload.image);
+			check(
+				"a Volume Up with no settings drives Master on the default device",
+				svg.includes("Master") && svg.includes("L58 12") && svg.includes('data-dir="up"'),
+				svg.includes("Master") ? "resolves to Master" : "did not resolve to Master",
+			);
+			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeUp", context: "ctx-fresh-up", payload: {} });
+		}
+
+		// --- manifest wiring (no hardware) -----------------------------------
+		{
+			const manifest = JSON.parse(
+				fs.readFileSync(path.join(__dirname, "..", "com.valentyn.alsa.sdPlugin", "manifest.json"), "utf8"),
+			);
+			const byUuid = Object.fromEntries(manifest.Actions.map((a) => [a.UUID, a]));
+			const steps = ["com.valentyn.alsa.volumeUp", "com.valentyn.alsa.volumeDown"].map((u) => byUuid[u]);
+			check("the manifest declares both one-directional volume actions", steps.every(Boolean));
+			// A second state would be out of range: render() skips setState for these.
+			check(
+				"one-directional volume actions declare exactly one state",
+				steps.every((a) => a && a.States.length === 1),
+			);
+			// A dial that only turns one way makes no sense; the Volume action owns
+			// encoders, so these must never be given an Encoder instance to render.
+			check(
+				"one-directional volume actions are keypad-only",
+				steps.every((a) => a && a.Controllers.length === 1 && a.Controllers[0] === "Keypad" && !a.Encoder),
+			);
+			const dir = path.join(__dirname, "..", "com.valentyn.alsa.sdPlugin");
+			const missing = [];
+			for (const a of manifest.Actions) {
+				for (const p of [a.Icon, ...a.States.map((s) => s.Image)]) {
+					if (!fs.existsSync(path.join(dir, `${p}.png`))) missing.push(`${p}.png`);
+				}
+				if (!fs.existsSync(path.join(dir, a.PropertyInspectorPath))) missing.push(a.PropertyInspectorPath);
+			}
+			check("every manifest asset exists on disk", missing.length === 0, missing.join(", "));
 		}
 
 		// --- the plugin.sh launch wrapper ------------------------------------

@@ -276,6 +276,18 @@ function ringGauge(cv, percent, color) {
 	}
 }
 
+// The "+" / "-" chip on the Volume Up and Volume Down tiles. Geometry matches
+// stepBadge() in lib/icons.js so the static tile and the live key agree; the
+// opaque disc underneath punches a hole through the ring it sits on.
+function stepBadge(cv, plus) {
+	const cx = 112;
+	const cy = 32;
+	cv.fillCircle(cx, cy, 22, C.bg, 1);
+	cv.fillCircle(cx, cy, 19, C.accent, 1);
+	cv.strokeLine(cx - 9, cy, cx + 9, cy, 6, C.bg, 1);
+	if (plus) cv.strokeLine(cx, cy - 9, cx, cy + 9, 6, C.bg, 1);
+}
+
 function base(size = 144) {
 	const cv = new Canvas(size);
 	cv.fillRoundRect(0, 0, size, size, 18, C.bg, 1);
@@ -312,6 +324,23 @@ fs.mkdirSync(OUT, { recursive: true });
 	ringGauge(cv, 0, C.accent);
 	speaker(cv, C.dim, 0, true);
 	write("volumeMuted", cv);
+}
+
+// Volume Up / Volume Down actions: the volume face with a direction chip. One
+// wave only, so the arcs stay clear of the chip.
+{
+	const cv = base();
+	ringGauge(cv, 70, C.accent);
+	speaker(cv, C.fg, 1, false);
+	stepBadge(cv, true);
+	write("volumeUp", cv);
+}
+{
+	const cv = base();
+	ringGauge(cv, 40, C.accent);
+	speaker(cv, C.fg, 1, false);
+	stepBadge(cv, false);
+	write("volumeDown", cv);
 }
 
 // Mute action, unmuted and muted.
