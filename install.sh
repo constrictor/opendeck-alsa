@@ -76,7 +76,23 @@ for stray in "$DEST".bak.*; do
 done
 
 cp -r "$SRC" "$DEST"
-chmod +x "$DEST/plugin.js"
+chmod +x "$DEST/plugin.js" "$DEST/plugin.sh"
+
+# OpenDeck refuses to launch any plugin whose CodePath ends in .js unless
+# `node --version` is at least v20.0.0. That check is hardcoded in OpenDeck, no
+# manifest field overrides it, and it fires before the plugin runs at all — so
+# on an older Node point the installed manifest at the wrapper, which OpenDeck
+# runs as a plain executable instead.
+if [ "$major" -lt 20 ]; then
+	node -e '
+	  const fs = require("fs");
+	  const file = process.argv[1];
+	  const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+	  manifest.CodePathLin = "plugin.sh";
+	  fs.writeFileSync(file, JSON.stringify(manifest, null, "\t") + "\n");
+	' "$DEST/manifest.json"
+	yellow "OpenDeck rejects .js plugins on Node < 20; this install launches via plugin.sh instead."
+fi
 
 green "Installed to $DEST"
 

@@ -401,6 +401,45 @@ async function main() {
 			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.mute", context: "ctx-fresh", payload: {} });
 		}
 
+		// --- the plugin.sh launch wrapper ------------------------------------
+		// OpenDeck gates any CodePath ending in .js behind a hardcoded
+		// `node --version >= v20.0.0`, so install.sh points Node 18 and 19
+		// installs at the wrapper, which OpenDeck runs as a plain executable
+		// with the same argv. Check it reaches registration the same way.
+		{
+			clear();
+			const wrapper = path.join(__dirname, "..", "com.valentyn.alsa.sdPlugin", "plugin.sh");
+			const wrapped = spawn(
+				wrapper,
+				[
+					"-port",
+					String(port),
+					"-pluginUUID",
+					"com.valentyn.alsa.wrapped",
+					"-registerEvent",
+					"registerPlugin",
+					"-info",
+					"{}",
+				],
+				{ stdio: ["ignore", "ignore", "ignore"] },
+			);
+			try {
+				await waitFor(
+					(m) => m.event === "registerPlugin" && m.uuid === "com.valentyn.alsa.wrapped",
+					5000,
+					"registerPlugin from plugin.sh",
+				);
+				check("plugin.sh launches the plugin the way OpenDeck runs a non-.js CodePath", true);
+			} catch (err) {
+				check("plugin.sh launches the plugin the way OpenDeck runs a non-.js CodePath", false, err.message);
+			}
+			// exec means the wrapper's PID is Node's, which is what lets
+			// OpenDeck's kill-on-deactivate reach the plugin.
+			wrapped.kill("SIGTERM");
+			await sleep(200);
+			check("killing the wrapper's PID stops the plugin", wrapped.exitCode !== null || wrapped.signalCode !== null);
+		}
+
 		// --- monitor lifecycle ---------------------------------------------
 		clear();
 		mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volume", context: badCtx, payload: {} });

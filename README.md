@@ -28,7 +28,7 @@ when muted. Dials use the `$B1` layout with a title, value and indicator bar.
 | | |
 |---|---|
 | Linux | with ALSA (any modern distribution) |
-| Node.js | 18 or newer — 21+ uses the built-in `WebSocket`, older versions use the bundled client; no npm dependencies either way |
+| Node.js | 18 or newer — 21+ uses the built-in `WebSocket`, older versions use the bundled client; no npm dependencies either way. On Node 18 or 19 the installer works around [OpenDeck's own `.js` version gate](#troubleshooting) |
 | `amixer` | from `alsa-utils`; **required** |
 | `alsactl` | from `alsa-utils`; optional, enables event-driven updates instead of 2 s polling |
 | OpenDeck | 2.14 or newer |
@@ -253,6 +253,7 @@ Node 18 and 20, which have no global `WebSocket`.
 com.valentyn.alsa.sdPlugin/
 ├── manifest.json
 ├── plugin.js                 # entry point; protocol + action logic
+├── plugin.sh                 # launch wrapper for OpenDeck on Node 18/19
 ├── lib/
 │   ├── alsa.js               # amixer read/write and parsing
 │   ├── monitor.js            # alsactl monitor subprocess manager
@@ -285,6 +286,14 @@ Tabs for indentation, matching the existing files.
 **The actions do not appear.** Restart OpenDeck; it only scans for plugins at
 startup. Check `~/.local/share/opendeck/logs/opendeck.log` for a
 `Registered plugin com.valentyn.alsa.sdPlugin` line.
+
+**The log says `Node.js version 20.0.0 or higher is required`.** That is
+OpenDeck, not this plugin: it refuses to launch any plugin whose `CodePath`
+ends in `.js` unless `node --version` is at least `v20.0.0`, and no manifest
+field overrides it. The plugin runs fine on Node 18, so `install.sh` points the
+installed manifest at `plugin.sh` — a wrapper that OpenDeck runs as a plain
+executable — whenever it finds an older Node. Re-run `./install.sh` and restart
+OpenDeck. Upgrading Node past 20 also works and needs no wrapper.
 
 **A key shows a red crossed circle.** The configured control is not present on
 the selected card. Reopen the action's settings and pick it again; the dropdown
