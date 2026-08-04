@@ -14,10 +14,13 @@ const path = require("node:path");
 const { MockOpenDeck } = require("./mock-opendeck.js");
 const alsa = require("../com.valentyn.alsa.sdPlugin/lib/alsa.js");
 
+// ENV must be initialised before pickCard() runs: it is a const, so probing
+// cards while it is still in its temporal dead zone throws a ReferenceError
+// straight into pickCard's catch and silently lands every run on card 0.
+const ENV = { ...process.env, LC_ALL: "C" };
 const CARD = Number(process.argv[2] ?? pickCard());
 const TARGET = alsa.resolveTarget(String(CARD));
 const PLUGIN = path.join(__dirname, "..", "com.valentyn.alsa.sdPlugin", "plugin.js");
-const ENV = { ...process.env, LC_ALL: "C" };
 
 function pickCard() {
 	// Prefer a card that actually has a Master control.
