@@ -17,13 +17,17 @@ fail=0
 
 # --- prerequisites ---------------------------------------------------------
 if ! command -v node >/dev/null 2>&1; then
-	red "node is not installed. This plugin needs Node.js 22 or newer."
+	red "node is not installed. This plugin needs Node.js 18 or newer."
 	fail=1
 else
 	major="$(node -p 'process.versions.node.split(".")[0]')"
-	if [ "$major" -lt 22 ]; then
-		red "Node.js $major found, but 22+ is required (for the built-in WebSocket client)."
+	if [ "$major" -lt 18 ]; then
+		red "Node.js $major found, but 18+ is required."
 		fail=1
+	elif [ "$major" -lt 21 ]; then
+		# No global WebSocket before 21; the plugin ships its own client for
+		# these, so this is a note rather than a problem.
+		yellow "Node.js $major found; using the bundled WebSocket client (22+ uses the built-in one)."
 	fi
 fi
 

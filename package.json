@@ -24,7 +24,7 @@
 	],
 	"private": true,
 	"engines": {
-		"node": ">=22"
+		"node": ">=18"
 	},
 	"os": [
 		"linux"
@@ -32,6 +32,7 @@
 	"scripts": {
 		"install-plugin": "./install.sh",
 		"test": "node tools/test-plugin.js",
+		"test:ws": "node tools/test-ws.js",
 		"icons": "node tools/gen-icons.js",
 		"showcase": "node tools/gen-showcase.js"
 	}

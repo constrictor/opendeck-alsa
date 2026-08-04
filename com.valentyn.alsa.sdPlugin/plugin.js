@@ -8,12 +8,14 @@
 //
 // Launched by OpenDeck as:
 //   plugin.js -port <n> -pluginUUID <uuid> -registerEvent <event> -info <json>
-// and speaks the Stream Deck plugin WebSocket protocol. Node 22 ships a global
-// WebSocket, so this has no npm dependencies.
+// and speaks the Stream Deck plugin WebSocket protocol. lib/ws.js uses the
+// global WebSocket on Node 21+ and falls back to a bundled client on Node 18
+// and 20, so this has no npm dependencies either way.
 
 const alsa = require("./lib/alsa.js");
 const icons = require("./lib/icons.js");
 const { CardMonitor } = require("./lib/monitor.js");
+const { WebSocket } = require("./lib/ws.js");
 
 const ACTION_VOLUME = "com.valentyn.alsa.volume";
 const ACTION_MUTE = "com.valentyn.alsa.mute";

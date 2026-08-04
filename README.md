@@ -1,7 +1,7 @@
 # OpenDeck ALSA plugin
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%E2%89%A522-brightgreen.svg)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#requirements)
 
 A native Linux plugin for [OpenDeck](https://github.com/nekename/OpenDeck) that drives ALSA
@@ -28,7 +28,7 @@ when muted. Dials use the `$B1` layout with a title, value and indicator bar.
 | | |
 |---|---|
 | Linux | with ALSA (any modern distribution) |
-| Node.js | 22 or newer — uses the built-in `WebSocket`, so there are no npm dependencies |
+| Node.js | 18 or newer — 21+ uses the built-in `WebSocket`, older versions use the bundled client; no npm dependencies either way |
 | `amixer` | from `alsa-utils`; **required** |
 | `alsactl` | from `alsa-utils`; optional, enables event-driven updates instead of 2 s polling |
 | OpenDeck | 2.14 or newer |
@@ -228,6 +228,7 @@ already next to it.
 
 ```sh
 node tools/test-plugin.js [cardIndex]   # end-to-end test against real hardware
+node tools/test-ws.js                   # WebSocket client unit test (no hardware)
 node tools/gen-icons.js                 # regenerate the static PNGs
 node tools/gen-showcase.js              # regenerate docs/showcase.svg
 ```
@@ -237,11 +238,14 @@ real plugin against a mock OpenDeck, drives it through registration, key
 presses, dial rotation, property-inspector queries and external `amixer`
 changes, asserts on what the plugin sends back, and restores every mixer value
 it touched. It needs a real sound card and passes on the ALSA default device
-too.
+too. Set `OPENDECK_ALSA_WS=fallback` to run it against the bundled WebSocket
+client instead of the runtime's built-in one, which is how the Node 18 path is
+covered on a newer Node.
 
 `tools/mock-opendeck.js` is a minimal WebSocket *server* — Node ships a client
 but no server, and the project has no npm dependencies, so the few dozen lines
-of RFC 6455 framing live there.
+of RFC 6455 framing live there. `lib/ws.js` is the mirror image: a client for
+Node 18 and 20, which have no global `WebSocket`.
 
 ### Layout
 
@@ -252,7 +256,8 @@ com.valentyn.alsa.sdPlugin/
 ├── lib/
 │   ├── alsa.js               # amixer read/write and parsing
 │   ├── monitor.js            # alsactl monitor subprocess manager
-│   └── icons.js              # runtime SVG key images
+│   ├── icons.js              # runtime SVG key images
+│   └── ws.js                 # global WebSocket, or a bundled client on Node <21
 ├── icons/                    # static PNGs referenced by the manifest
 └── propertyInspector/
     ├── alsa-pi.js            # shared settings + live card/control lists
@@ -263,7 +268,8 @@ tools/
 ├── gen-icons.js              # PNG rasteriser and encoder (build-time)
 ├── gen-showcase.js           # builds docs/showcase.svg from lib/icons.js
 ├── mock-opendeck.js          # minimal WebSocket server for testing
-└── test-plugin.js            # end-to-end test
+├── test-plugin.js            # end-to-end test
+└── test-ws.js                # WebSocket client unit test
 ```
 
 ### Contributing
