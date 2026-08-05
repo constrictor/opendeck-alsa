@@ -7,7 +7,12 @@
 A native Linux plugin for [OpenDeck](https://github.com/nekename/OpenDeck) that drives ALSA
 mixer controls directly.
 
-![Key faces and the dial touchstrip](docs/showcase.svg)
+![Key faces and the dial touchstrip](docs/showcase.png)
+
+<sub>Keys as the hardware actually shows them: rendered at OpenDeck's 144&times;144 canvas,
+decimated to the Stream Deck +'s 120&times;120 keys the way OpenDeck does it, and enlarged
+2&times; so the panel's real pixels stay visible. The vector source is in
+[`docs/showcase.svg`](docs/showcase.svg).</sub>
 
 - **Mute buttons** for the microphone, the speakers, or any other control.
 - **Volume knobs** — dial rotation adjusts the level, pressing the dial mutes.
@@ -20,7 +25,7 @@ mixer controls directly.
 - **No dependencies.** Pure Node.js, no npm packages, no compiler, no ALSA
   development headers.
 
-Keys draw their own artwork: a volume key shows a level ring and a percentage, a
+Keys draw their own artwork: a volume key shows a level gauge and a percentage, a
 mute key shows a speaker or microphone glyph that greys out and gains a red slash
 when muted. Dials use the `$B1` layout with a title, value and indicator bar.
 
@@ -111,6 +116,18 @@ it cannot drift from what the plugin actually draws:
 ```sh
 npm run showcase       # or: node tools/gen-showcase.js
 ```
+
+This writes both `docs/showcase.svg` (the vector source) and `docs/showcase.png`
+(what the panel really displays). The PNG needs a headless Chrome or Chromium on
+`PATH` to rasterise the SVG; without one, only the SVG is written.
+
+The two differ, and deliberately so. OpenDeck draws a key image into a
+144&times;144 canvas, then `elgato-streamdeck` runs
+`resize_exact(120, 120, FilterType::Nearest)` on it before sending it to a
+Stream Deck +. Nearest-neighbour at a 6:5 ratio drops every sixth row and
+column and point-samples the antialiased edges instead of averaging them, so
+thin strokes come out uneven and smooth edges turn into stair-steps. `showcase.png`
+applies that decimation; the artwork in `lib/icons.js` is drawn to survive it.
 
 Live key images are *not* built ahead of time — `lib/icons.js` renders them as
 SVG at draw time so they can reflect the current level and mute state.
@@ -256,7 +273,7 @@ already next to it.
 node tools/test-plugin.js [cardIndex]   # end-to-end test against real hardware
 node tools/test-ws.js                   # WebSocket client unit test (no hardware)
 node tools/gen-icons.js                 # regenerate the static PNGs
-node tools/gen-showcase.js              # regenerate docs/showcase.svg
+node tools/gen-showcase.js              # regenerate docs/showcase.{svg,png}
 ```
 
 `tools/test-plugin.js` is an end-to-end test, not a unit test: it spawns the
@@ -293,8 +310,9 @@ com.valentyn.alsa.sdPlugin/
     ├── volumeStep.html       # shared by Volume Up and Volume Down
     └── mute.html
 tools/
-├── gen-icons.js              # PNG rasteriser and encoder (build-time)
-├── gen-showcase.js           # builds docs/showcase.svg from lib/icons.js
+├── gen-icons.js              # static PNG rasteriser (build-time)
+├── gen-showcase.js           # builds docs/showcase.{svg,png} from lib/icons.js
+├── png.js                    # PNG encode/decode and nearest resample
 ├── mock-opendeck.js          # minimal WebSocket server for testing
 ├── test-plugin.js            # end-to-end test
 └── test-ws.js                # WebSocket client unit test

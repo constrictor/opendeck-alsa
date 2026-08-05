@@ -442,7 +442,9 @@ async function main() {
 		const badImg = await waitFor((m) => m.event === "setImage" && m.context === badCtx, 3000, "unavailable image");
 		check(
 			"a missing control renders an unavailable icon instead of crashing",
-			svgOf(badImg.payload.image).includes("Nonexistent Control"),
+			// The name is truncated to fit the key — 19 characters will not render
+			// legibly at 120px — so only the leading part survives.
+			svgOf(badImg.payload.image).includes("Nonexistent"),
 		);
 
 		// --- the ALSA default device (PipeWire/PulseAudio) ------------------
@@ -564,11 +566,9 @@ async function main() {
 			});
 			const m = await waitFor((x) => x.event === "setImage" && x.context === "ctx-fresh", 3000, "fresh mute");
 			const svg = svgOf(m.payload.image);
-			// The mic glyph is a rounded capsule; the speaker glyph is a polygon.
-			const isMic = svg.includes("<rect x=") && !svg.includes("L58 12");
 			check(
 				"a Mute Toggle with no settings shows the microphone, not Master",
-				isMic && svg.includes("Capture"),
+				svg.includes('data-glyph="mic"') && svg.includes("Capture"),
 				svg.includes("Master") ? "still resolving to Master" : "resolves to Capture",
 			);
 			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.mute", context: "ctx-fresh", payload: {} });
@@ -588,7 +588,7 @@ async function main() {
 			const svg = svgOf(m.payload.image);
 			check(
 				"a Volume Up with no settings drives Master on the default device",
-				svg.includes("Master") && svg.includes("L58 12") && svg.includes('data-dir="up"'),
+				svg.includes("Master") && svg.includes('data-glyph="speaker"') && svg.includes('data-dir="up"'),
 				svg.includes("Master") ? "resolves to Master" : "did not resolve to Master",
 			);
 			mock.send({ event: "willDisappear", action: "com.valentyn.alsa.volumeUp", context: "ctx-fresh-up", payload: {} });
